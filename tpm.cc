@@ -46,8 +46,10 @@ bool Tpm::Init() {
   // that point, the public API for Tpm only checks these booleans, so other
   // threads can check without being blocked.  InitializeTpm() will reset the
   // is_owned_ bit on success.
-  is_disabled_ = IsDisabledCheckViaSysfs();
-  is_owned_ = IsOwnedCheckViaSysfs();
+  if (file_util::PathExists(FilePath(kTpmCheckEnabledFile))) {
+    is_disabled_ = IsDisabledCheckViaSysfs();
+    is_owned_ = IsOwnedCheckViaSysfs();
+  }
   return true;
 }
 
@@ -454,7 +456,6 @@ bool Tpm::InitializeTpm() {
   }
 
   if (is_disabled_) {
-    LOG(ERROR) << "Error TPM is disabled";
     return false;
   }
 
