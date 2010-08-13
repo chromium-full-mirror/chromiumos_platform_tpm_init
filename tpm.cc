@@ -541,13 +541,14 @@ bool Tpm::InitializeTpm() {
   }
 
   // Ensure the SRK is available
+  TSS_RESULT result;
   TSS_HKEY srk_handle;
   TSS_UUID SRK_UUID = TSS_UUID_SRK;
-  if ((result = Tspi_Context_LoadKeyByUUID(context_handle, TSS_PS_TYPE_SYSTEM,
+  if ((result = Tspi_Context_LoadKeyByUUID(context_handle_, TSS_PS_TYPE_SYSTEM,
                                            SRK_UUID, &srk_handle))) {
     is_srk_available_ = false;
   } else {
-    Tspi_Context_CloseObject(context_handle, srk_handle);
+    Tspi_Context_CloseObject(context_handle_, srk_handle);
     is_srk_available_ = true;
   }
 
