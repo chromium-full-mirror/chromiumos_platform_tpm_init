@@ -24,6 +24,7 @@ const char* kTpmOwnedFile = "/var/lib/.tpm_owned";
 const char* kOpenCryptokiPath = "/var/lib/opencryptoki";
 const int kTpmConnectRetries = 10;
 const int kTpmConnectIntervalMs = 100;
+const char kTpmWellKnownPassword[] = TSS_WELL_KNOWN_SECRET;
 
 Tpm::Tpm()
     : context_handle_(0),
@@ -32,7 +33,8 @@ Tpm::Tpm()
       owner_password_(),
       password_sync_lock_(),
       is_disabled_(true),
-      is_owned_(false) {
+      is_owned_(false),
+      is_srk_available_(false) {
 }
 
 Tpm::~Tpm() {
@@ -49,6 +51,17 @@ bool Tpm::Init() {
   if (file_util::PathExists(FilePath(kTpmCheckEnabledFile))) {
     is_disabled_ = IsDisabledCheckViaSysfs();
     is_owned_ = IsOwnedCheckViaSysfs();
+  } else {
+    TSS_HCONTEXT context_handle;
+    if (OpenAndConnectTpm(&context_handle)) {
+      bool enabled = false;
+      bool owned = false;
+      IsEnabledOwnedCheckViaContext(context_handle, &enabled, &owned);
+      is_disabled_ = !enabled;
+      is_owned_ = owned;
+      Tspi_Context_Close(context_handle);
+    } else {
+    }
   }
   return true;
 }
@@ -164,49 +177,32 @@ bool Tpm::IsOwnedCheckViaSysfs() {
   return (contents[0] != '0');
 }
 
-bool Tpm::IsDisabledCheckViaContext(TSS_HCONTEXT context_handle) {
-  bool value = true;
+void Tpm::IsEnabledOwnedCheckViaContext(TSS_HCONTEXT context_handle,
+                                        bool* enabled, bool* owned) {
+  *enabled = false;
+  *owned = false;
+
   TSS_RESULT result;
   TSS_HTPM tpm_handle;
   if (!GetTpm(context_handle, &tpm_handle)) {
-    return value;
+    return;
   }
 
+  UINT32 sub_cap = TSS_TPMCAP_PROP_OWNER;
   UINT32 cap_length = 0;
   BYTE* cap = NULL;
-  if ((result = Tspi_TPM_GetCapability(tpm_handle, TSS_TPMCAP_FLAG,
-                                       0, NULL, &cap_length, &cap))) {
-    LOG(ERROR) << "Error calling Tspi_TPM_GetCapability: " << result;
-    return value;
+  if ((result = Tspi_TPM_GetCapability(tpm_handle, TSS_TPMCAP_PROPERTY,
+                                       sizeof(sub_cap),
+                                       reinterpret_cast<BYTE*>(&sub_cap),
+                                       &cap_length, &cap)) == 0) {
+    if (cap_length >= (sizeof(TSS_BOOL))) {
+      *enabled = true;
+      *owned = ((*(reinterpret_cast<TSS_BOOL*>(cap))) != 0);
+    }
+    Tspi_Context_FreeMemory(context_handle, cap);
+  } else if(ERROR_CODE(result) == TPM_E_DISABLED) {
+    *enabled = false;
   }
-  if (cap_length >= (2 * sizeof(int))) {
-    value = (((*(reinterpret_cast<int*>(cap))) & TPM_PF_DISABLE) != 0);
-  }
-  Tspi_Context_FreeMemory(context_handle, cap);
-  return value;
-}
-
-bool Tpm::IsOwnedCheckViaContext(TSS_HCONTEXT context_handle) {
-  bool value = true;
-  TSS_RESULT result;
-  TSS_HTPM tpm_handle;
-  if (!GetTpm(context_handle, &tpm_handle)) {
-    LOG(ERROR) << "Error calling Tspi_Context_GetTpmObject: " << result;
-    return value;
-  }
-
-  UINT32 cap_length = 0;
-  BYTE* cap = NULL;
-  if ((result = Tspi_TPM_GetCapability(tpm_handle, TSS_TPMCAP_FLAG,
-                                       0, NULL, &cap_length, &cap))) {
-    LOG(ERROR) << "Error calling Tspi_TPM_GetCapability: " << result;
-    return value;
-  }
-  if (cap_length >= (2 * sizeof(int))) {
-    value = (((*(reinterpret_cast<int*>(cap))) & TPM_PF_OWNERSHIP) != 0);
-  }
-  Tspi_Context_FreeMemory(context_handle, cap);
-  return value;
 }
 
 bool Tpm::CreateEndorsementKey(TSS_HCONTEXT context_handle) {
@@ -245,7 +241,7 @@ bool Tpm::IsEndorsementKeyAvailable(TSS_HCONTEXT context_handle) {
   TSS_HKEY local_key_handle;
   if ((result = Tspi_TPM_GetPubEndorsementKey(tpm_handle, false, NULL,
                                               &local_key_handle))) {
-    LOG(ERROR) << "Error calling Tspi_Context_CreateObject: " << result;
+    LOG(ERROR) << "Error calling Tspi_TPM_GetPubEndorsementKey: " << result;
     return false;
   }
 
@@ -264,10 +260,8 @@ void Tpm::CreateOwnerPassword(SecureBlob* password) {
   password->swap(tpm_password);
 }
 
-bool Tpm::TakeOwnership(TSS_HCONTEXT context_handle, int max_timeout_tries) {
-  SecureBlob owner_password;
-  CreateOwnerPassword(&owner_password);
-
+bool Tpm::TakeOwnership(TSS_HCONTEXT context_handle, int max_timeout_tries,
+                        const SecureBlob& owner_password) {
   TSS_RESULT result;
   TSS_HTPM tpm_handle;
   if (!GetTpmWithAuth(context_handle, owner_password, &tpm_handle)) {
@@ -318,10 +312,6 @@ bool Tpm::TakeOwnership(TSS_HCONTEXT context_handle, int max_timeout_tries) {
 
   Tspi_Context_CloseObject(context_handle, srk_handle);
 
-  password_sync_lock_.Acquire();
-  owner_password_.swap(owner_password);
-  password_sync_lock_.Release();
-
   return true;
 }
 
@@ -337,7 +327,7 @@ bool Tpm::ZeroSrkPassword(TSS_HCONTEXT context_handle,
   TSS_UUID SRK_UUID = TSS_UUID_SRK;
   if ((result = Tspi_Context_LoadKeyByUUID(context_handle, TSS_PS_TYPE_SYSTEM,
                                            SRK_UUID, &srk_handle))) {
-    LOG(ERROR) << "Couldn't load SRK: " << result;
+    LOG(ERROR) << "Error calling Tspi_Context_LoadKeyByUUID: " << result;
     return false;
   }
 
@@ -346,7 +336,7 @@ bool Tpm::ZeroSrkPassword(TSS_HCONTEXT context_handle,
                                           TSS_OBJECT_TYPE_POLICY,
                                           TSS_POLICY_USAGE,
                                           &policy_handle))) {
-    LOG(ERROR) << "Error creating policy object: " << result;
+    LOG(ERROR) << "Error calling Tspi_Context_CreateObject: " << result;
     Tspi_Context_CloseObject(context_handle, srk_handle);
     return false;
   }
@@ -354,7 +344,7 @@ bool Tpm::ZeroSrkPassword(TSS_HCONTEXT context_handle,
   BYTE new_password[0];
   if ((result = Tspi_Policy_SetSecret(policy_handle, TSS_SECRET_MODE_PLAIN,
                                       0, new_password))) {
-    LOG(ERROR) << "Error setting srk password: " << result;
+    LOG(ERROR) << "Error calling Tspi_Policy_SetSecret: " << result;
     Tspi_Context_CloseObject(context_handle, policy_handle);
     Tspi_Context_CloseObject(context_handle, srk_handle);
     return false;
@@ -363,7 +353,7 @@ bool Tpm::ZeroSrkPassword(TSS_HCONTEXT context_handle,
   if ((result = Tspi_ChangeAuth(srk_handle,
                                 tpm_handle,
                                 policy_handle))) {
-    LOG(ERROR) << "Error creating policy object: " << result;
+    LOG(ERROR) << "Error calling Tspi_ChangeAuth: " << result;
     Tspi_Context_CloseObject(context_handle, policy_handle);
     Tspi_Context_CloseObject(context_handle, srk_handle);
     return false;
@@ -382,10 +372,59 @@ bool Tpm::UnrestrictSrk(TSS_HCONTEXT context_handle,
     return false;
   }
 
-  if ((result = Tspi_TPM_SetStatus(tpm_handle,
+  TSS_BOOL current_status = false;
+
+  if ((result = Tspi_TPM_GetStatus(tpm_handle,
                                    TSS_TPMSTATUS_DISABLEPUBSRKREAD,
-                                   false))) {
-    LOG(ERROR) << "Error calling Tspi_TPM_SetStatus: " << result;
+                                   &current_status))) {
+    LOG(ERROR) << "Error calling Tspi_TPM_GetStatus: " << result;
+    return false;
+  }
+
+  // If it is currently owner auth (true), set it to SRK auth
+  if (current_status) {
+    if ((result = Tspi_TPM_SetStatus(tpm_handle,
+                                     TSS_TPMSTATUS_DISABLEPUBSRKREAD,
+                                     false))) {
+      LOG(ERROR) << "Error calling Tspi_TPM_SetStatus: " << result;
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool Tpm::ChangeOwnerPassword(TSS_HCONTEXT context_handle,
+                              const SecureBlob& previous_owner_password,
+                              const SecureBlob& owner_password) {
+  TSS_RESULT result;
+  TSS_HTPM tpm_handle;
+  if (!GetTpmWithAuth(context_handle, previous_owner_password, &tpm_handle)) {
+    return false;
+  }
+
+  TSS_HPOLICY policy_handle;
+  if ((result = Tspi_Context_CreateObject(context_handle,
+                                          TSS_OBJECT_TYPE_POLICY,
+                                          TSS_POLICY_USAGE,
+                                          &policy_handle))) {
+    LOG(ERROR) << "Error calling Tspi_Context_CreateObject: " << result;
+    return false;
+  }
+
+  if ((result = Tspi_Policy_SetSecret(policy_handle,
+      TSS_SECRET_MODE_PLAIN,
+      owner_password.size(),
+      const_cast<BYTE *>(static_cast<const BYTE *>(
+          owner_password.const_data()))))) {
+    LOG(ERROR) << "Error calling Tspi_Policy_SetSecret: " << result;
+    Tspi_Context_CloseObject(context_handle, policy_handle);
+    return false;
+  }
+
+  if ((result = Tspi_ChangeAuth(tpm_handle, 0, policy_handle))) {
+    LOG(ERROR) << "Error calling Tspi_ChangeAuth: " << result;
+    Tspi_Context_CloseObject(context_handle, policy_handle);
     return false;
   }
 
@@ -410,7 +449,6 @@ bool Tpm::GetTpmWithAuth(TSS_HCONTEXT context_handle,
   TSS_RESULT result;
   TSS_HTPM local_tpm_handle;
   if (!GetTpm(context_handle, &local_tpm_handle)) {
-    LOG(ERROR) << "Error getting TPM handle";
     return false;
   }
 
@@ -430,6 +468,18 @@ bool Tpm::GetTpmWithAuth(TSS_HCONTEXT context_handle,
   }
 
   *tpm_handle = local_tpm_handle;
+  return true;
+}
+
+bool Tpm::TestTpmAuth(TSS_HTPM tpm_handle) {
+  // Call Tspi_TPM_GetStatus to test the authentication
+  TSS_RESULT result;
+  TSS_BOOL current_status = false;
+  if ((result = Tspi_TPM_GetStatus(tpm_handle,
+                                   TSS_TPMSTATUS_DISABLED,
+                                   &current_status))) {
+    return false;
+  }
   return true;
 }
 
@@ -459,50 +509,79 @@ bool Tpm::InitializeTpm() {
     return false;
   }
 
-  if (is_owned_) {
-    return false;
-  }
+  SecureBlob default_owner_password(sizeof(kTpmWellKnownPassword));
+  memcpy(default_owner_password.data(), kTpmWellKnownPassword,
+         sizeof(kTpmWellKnownPassword));
 
-  file_util::Delete(FilePath(kOpenCryptokiPath), true);
-  file_util::Delete(FilePath(kTpmOwnedFile), false);
+  bool took_ownership = false;
+  if (!is_owned_) {
+    file_util::Delete(FilePath(kOpenCryptokiPath), true);
+    file_util::Delete(FilePath(kTpmOwnedFile), false);
 
-  if (!IsEndorsementKeyAvailable(context_handle_)) {
-    if (!CreateEndorsementKey(context_handle_)) {
-      LOG(ERROR) << "Failed to create endorsement key";
+    if (!IsEndorsementKeyAvailable(context_handle_)) {
+      if (!CreateEndorsementKey(context_handle_)) {
+        LOG(ERROR) << "Failed to create endorsement key";
+        return false;
+      }
+    }
+
+    if (!IsEndorsementKeyAvailable(context_handle_)) {
+      LOG(ERROR) << "Endorsement key is not available";
       return false;
     }
+
+    if (!TakeOwnership(context_handle_, kMaxTimeoutRetries,
+                       default_owner_password)) {
+      LOG(ERROR) << "Take Ownership failed";
+      return false;
+    }
+
+    is_owned_ = true;
+    took_ownership = true;
   }
 
-  if (!IsEndorsementKeyAvailable(context_handle_)) {
-    LOG(ERROR) << "Endorsement key is not available";
-    return false;
+  // Ensure the SRK is available
+  TSS_HKEY srk_handle;
+  TSS_UUID SRK_UUID = TSS_UUID_SRK;
+  if ((result = Tspi_Context_LoadKeyByUUID(context_handle, TSS_PS_TYPE_SYSTEM,
+                                           SRK_UUID, &srk_handle))) {
+    is_srk_available_ = false;
+  } else {
+    Tspi_Context_CloseObject(context_handle, srk_handle);
+    is_srk_available_ = true;
   }
 
-  if (!TakeOwnership(context_handle_, kMaxTimeoutRetries)) {
-    LOG(ERROR) << "Take Ownership failed";
-    return false;
+  // If we can open the TPM with the default password, then we still need to
+  // zero the SRK password and unrestrict it, then change the owner password.
+  TSS_HTPM tpm_handle;
+  if (GetTpmWithAuth(context_handle_, default_owner_password, &tpm_handle) &&
+      TestTpmAuth(tpm_handle)) {
+    if (!ZeroSrkPassword(context_handle_, default_owner_password)) {
+      LOG(ERROR) << "Couldn't zero SRK password";
+      return false;
+    }
+
+    if (!UnrestrictSrk(context_handle_, default_owner_password)) {
+      LOG(ERROR) << "Couldn't unrestrict the SRK";
+      return false;
+    }
+    SecureBlob owner_password;
+    CreateOwnerPassword(&owner_password);
+
+    if (!ChangeOwnerPassword(context_handle_, default_owner_password,
+                             owner_password)) {
+      LOG(ERROR) << "Couldn't set the owner password";
+      return false;
+    }
+
+    password_sync_lock_.Acquire();
+    owner_password_.assign(owner_password.begin(), owner_password.end());
+    password_sync_lock_.Release();
+
+    file_util::WriteFile(FilePath(kTpmOwnedFile), NULL, 0);
   }
 
-  SecureBlob owner_password;
-  password_sync_lock_.Acquire();
-  owner_password.assign(owner_password_.begin(), owner_password_.end());
-  password_sync_lock_.Release();
-
-  if (!ZeroSrkPassword(context_handle_, owner_password)) {
-    LOG(ERROR) << "Couldn't zero SRK password";
-    return false;
-  }
-
-  if (!UnrestrictSrk(context_handle_, owner_password)) {
-    LOG(ERROR) << "Couldn't unrestrict the SRK";
-    return false;
-  }
-
-  is_owned_ = true;
-
-  file_util::WriteFile(FilePath(kTpmOwnedFile), NULL, 0);
-
- return true;
+ return took_ownership;
 }
 
 } // namespace tpm_init

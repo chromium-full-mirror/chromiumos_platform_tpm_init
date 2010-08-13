@@ -61,6 +61,9 @@ class Tpm {
   // currently being taken (such as on a separate thread).
   bool IsOwned() const { return is_owned_; }
 
+  // Returns whether or not the SRK is available
+  bool IsSrkAvailable() const { return is_srk_available_; }
+
   // Runs the TPM initialization sequence.  This may take a long time due to the
   // call to Tspi_TPM_TakeOwnership.
   bool InitializeTpm();
@@ -87,19 +90,15 @@ class Tpm {
   // entry in /sys/class/misc
   bool IsOwnedCheckViaSysfs();
 
-  // Returns whether or not the TPM is disabled using a call to
+  // Returns whether or not the TPM is enabled and owned using a call to
   // Tspi_TPM_GetCapability
   //
   // Parameters
   //   context_handle - The context handle for the TPM session
-  bool IsDisabledCheckViaContext(TSS_HCONTEXT context_handle);
-
-  // Returns whether or not the TPM is owned using a call to
-  // Tspi_TPM_GetCapability
-  //
-  // Parameters
-  //   context_handle - The context handle for the TPM session
-  bool IsOwnedCheckViaContext(TSS_HCONTEXT context_handle);
+  //   enabled (OUT) - Whether the TPM is enabled
+  //   owned (OUT) - Whether the TPM is owned
+  void IsEnabledOwnedCheckViaContext(TSS_HCONTEXT context_handle,
+                                     bool* enabled, bool* owned);
 
   // Attempts to create the endorsement key in the TPM
   //
@@ -126,7 +125,8 @@ class Tpm {
   //   context_handle - The context handle for the TPM session
   //   max_timeout_tries - The maximum number of attempts to make if the call
   //                       times out, which it may occasionally do
-  bool TakeOwnership(TSS_HCONTEXT context_handle, int max_timeout_tries);
+  bool TakeOwnership(TSS_HCONTEXT context_handle, int max_timeout_tries,
+                     const SecureBlob& owner_password);
 
   // Zeros the SRK password (sets it to an empty string)
   //
@@ -143,6 +143,16 @@ class Tpm {
   //   owner_password - The owner password for the TPM
   bool UnrestrictSrk(TSS_HCONTEXT context_handle,
                      const SecureBlob& owner_password);
+
+  // Changes the owner password
+  //
+  // Parameters
+  //   context_handle - The context handle for the TPM session
+  //   previous_owner_password - The previous owner password for the TPM
+  //   owner_password - The owner password for the TPM
+  bool ChangeOwnerPassword(TSS_HCONTEXT context_handle,
+                           const SecureBlob& previous_owner_password,
+                           const SecureBlob& owner_password);
 
   // Gets a handle to the TPM from the specified context
   //
@@ -161,6 +171,12 @@ class Tpm {
   bool GetTpmWithAuth(TSS_HCONTEXT context_handle,
                       const SecureBlob& owner_password,
                       TSS_HTPM* tpm_handle);
+
+  // Test the TPM auth by calling Tspi_TPM_GetStatus
+  //
+  // Parameters
+  //   tpm_handle = The TPM handle
+  bool TestTpmAuth(TSS_HTPM tpm_handle);
 
   // The context handle for this TPM session
   TSS_HCONTEXT context_handle_;
@@ -184,6 +200,9 @@ class Tpm {
 
   // Indicates if the TPM is owned
   bool is_owned_;
+
+  // Indicates if the SRK is available
+  bool is_srk_available_;
 
   DISALLOW_COPY_AND_ASSIGN(Tpm);
 };
