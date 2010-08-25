@@ -68,6 +68,13 @@ class Tpm {
   // call to Tspi_TPM_TakeOwnership.
   bool InitializeTpm();
 
+  // Gets random bytes from the TPM
+  //
+  // Parameters
+  //   length - The number of bytes to get
+  //   data (OUT) - The random data from the TPM
+  bool GetRandomData(size_t length, chromeos::Blob* data);
+
  private:
   // Attempts to connect to tcsd
   //

@@ -585,4 +585,34 @@ bool Tpm::InitializeTpm() {
  return took_ownership;
 }
 
+bool Tpm::GetRandomData(size_t length, chromeos::Blob* data) {
+  TSS_HCONTEXT context_handle;
+  if (!OpenAndConnectTpm(&context_handle)) {
+    LOG(ERROR) << "Could not open the TPM";
+    return false;
+  }
+
+  TSS_HTPM tpm_handle;
+  if (!GetTpm(context_handle, &tpm_handle)) {
+    LOG(ERROR) << "Could not get a handle to the TPM.";
+    Tspi_Context_Close(context_handle);
+    return false;
+  }
+
+  TSS_RESULT result;
+  SecureBlob random(length);
+  BYTE* tpm_data = NULL;
+  if ((result = Tspi_TPM_GetRandom(tpm_handle, random.size(), &tpm_data))) {
+    LOG(ERROR) << "Could not get random data from the TPM: " << result;
+    Tspi_Context_Close(context_handle);
+    return false;
+  }
+  memcpy(random.data(), tpm_data, random.size());
+  Tspi_Context_FreeMemory(context_handle, tpm_data);
+  chromeos::SecureMemset(tpm_data, 0, random.size());
+  Tspi_Context_Close(context_handle);
+  data->swap(random);
+  return true;
+}
+
 } // namespace tpm_init

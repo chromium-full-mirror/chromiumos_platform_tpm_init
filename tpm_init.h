@@ -23,6 +23,13 @@ class TpmInit {
 
   virtual ~TpmInit();
 
+  // Gets random data from the TPM
+  //
+  // Parameters
+  //   length - The number of bytes to get
+  //   data (OUT) - Receives the random bytes
+  virtual bool GetRandomData(int length, chromeos::Blob* data);
+
   // Starts asynchronous initialization of the TPM
   virtual bool StartInitializeTpm();
 

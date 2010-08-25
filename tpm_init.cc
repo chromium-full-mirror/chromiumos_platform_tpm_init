@@ -28,6 +28,7 @@ class TpmInitTask : public PlatformThread::Delegate {
   bool IsTpmEnabled();
   bool GetTpmPassword(chromeos::Blob* password);
   long GetInitializationMillis();
+  bool GetRandomData(int length, chromeos::Blob* data);
 
  private:
   scoped_ptr<tpm_init::Tpm> default_tpm_;
@@ -42,6 +43,10 @@ TpmInit::TpmInit()
 }
 
 TpmInit::~TpmInit() {
+}
+
+bool TpmInit::GetRandomData(int length, chromeos::Blob* data) {
+  return tpm_init_->GetRandomData(length, data);
 }
 
 bool TpmInit::StartInitializeTpm() {
@@ -123,6 +128,10 @@ bool TpmInitTask::GetTpmPassword(chromeos::Blob* password) {
 
 long TpmInitTask::GetInitializationMillis() {
   return initialization_time_;
+}
+
+bool TpmInitTask::GetRandomData(int length, chromeos::Blob* data) {
+  return tpm_->GetRandomData(length, data);
 }
 
 }  // namespace tpm_init
