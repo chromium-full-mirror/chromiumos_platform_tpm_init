@@ -34,7 +34,8 @@ Tpm::Tpm()
       password_sync_lock_(),
       is_disabled_(true),
       is_owned_(false),
-      is_srk_available_(false) {
+      is_srk_available_(false),
+      is_being_owned_(false) {
 }
 
 Tpm::~Tpm() {
@@ -515,24 +516,28 @@ bool Tpm::InitializeTpm() {
 
   bool took_ownership = false;
   if (!is_owned_) {
+    is_being_owned_ = true;
     file_util::Delete(FilePath(kOpenCryptokiPath), true);
     file_util::Delete(FilePath(kTpmOwnedFile), false);
 
     if (!IsEndorsementKeyAvailable(context_handle_)) {
       if (!CreateEndorsementKey(context_handle_)) {
         LOG(ERROR) << "Failed to create endorsement key";
+        is_being_owned_ = false;
         return false;
       }
     }
 
     if (!IsEndorsementKeyAvailable(context_handle_)) {
       LOG(ERROR) << "Endorsement key is not available";
+      is_being_owned_ = false;
       return false;
     }
 
     if (!TakeOwnership(context_handle_, kMaxTimeoutRetries,
                        default_owner_password)) {
       LOG(ERROR) << "Take Ownership failed";
+      is_being_owned_ = false;
       return false;
     }
 
@@ -559,11 +564,13 @@ bool Tpm::InitializeTpm() {
       TestTpmAuth(tpm_handle)) {
     if (!ZeroSrkPassword(context_handle_, default_owner_password)) {
       LOG(ERROR) << "Couldn't zero SRK password";
+      is_being_owned_ = false;
       return false;
     }
 
     if (!UnrestrictSrk(context_handle_, default_owner_password)) {
       LOG(ERROR) << "Couldn't unrestrict the SRK";
+      is_being_owned_ = false;
       return false;
     }
     SecureBlob owner_password;
@@ -572,6 +579,7 @@ bool Tpm::InitializeTpm() {
     if (!ChangeOwnerPassword(context_handle_, default_owner_password,
                              owner_password)) {
       LOG(ERROR) << "Couldn't set the owner password";
+      is_being_owned_ = false;
       return false;
     }
 
@@ -582,7 +590,9 @@ bool Tpm::InitializeTpm() {
     file_util::WriteFile(FilePath(kTpmOwnedFile), NULL, 0);
   }
 
- return took_ownership;
+  is_being_owned_ = false;
+
+  return took_ownership;
 }
 
 bool Tpm::GetRandomData(size_t length, chromeos::Blob* data) {

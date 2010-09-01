@@ -39,6 +39,12 @@ class TpmInit {
   // Returns true if the TPM is enabled
   virtual bool IsTpmEnabled();
 
+  // Returns true if the TPM is owned
+  virtual bool IsTpmOwned();
+
+  // Returns true if the TPM is being owned
+  virtual bool IsTpmBeingOwned();
+
   // Gets the TPM password if the TPM initialization took ownership
   //
   // Parameters

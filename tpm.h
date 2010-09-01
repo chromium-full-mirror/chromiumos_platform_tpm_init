@@ -64,6 +64,9 @@ class Tpm {
   // Returns whether or not the SRK is available
   bool IsSrkAvailable() const { return is_srk_available_; }
 
+  // Returns whether or not the TPM is being owned
+  bool IsBeingOwned() const { return is_being_owned_; }
+
   // Runs the TPM initialization sequence.  This may take a long time due to the
   // call to Tspi_TPM_TakeOwnership.
   bool InitializeTpm();
@@ -210,6 +213,9 @@ class Tpm {
 
   // Indicates if the SRK is available
   bool is_srk_available_;
+
+  // Indicates if the TPM is being owned
+  bool is_being_owned_;
 
   DISALLOW_COPY_AND_ASSIGN(Tpm);
 };

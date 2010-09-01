@@ -26,6 +26,8 @@ class TpmInitTask : public PlatformThread::Delegate {
 
   bool IsTpmReady();
   bool IsTpmEnabled();
+  bool IsTpmOwned();
+  bool IsTpmBeingOwned();
   bool GetTpmPassword(chromeos::Blob* password);
   long GetInitializationMillis();
   bool GetRandomData(int length, chromeos::Blob* data);
@@ -64,6 +66,14 @@ bool TpmInit::IsTpmReady() {
 
 bool TpmInit::IsTpmEnabled() {
   return tpm_init_->IsTpmEnabled();
+}
+
+bool TpmInit::IsTpmOwned() {
+  return tpm_init_->IsTpmOwned();
+}
+
+bool TpmInit::IsTpmBeingOwned() {
+  return tpm_init_->IsTpmBeingOwned();
 }
 
 bool TpmInit::GetTpmPassword(chromeos::Blob* password) {
@@ -120,6 +130,14 @@ bool TpmInitTask::IsTpmReady() {
 
 bool TpmInitTask::IsTpmEnabled() {
   return tpm_->IsEnabled();
+}
+
+bool TpmInitTask::IsTpmOwned() {
+  return tpm_->IsOwned();
+}
+
+bool TpmInitTask::IsTpmBeingOwned() {
+  return tpm_->IsBeingOwned();
 }
 
 bool TpmInitTask::GetTpmPassword(chromeos::Blob* password) {
