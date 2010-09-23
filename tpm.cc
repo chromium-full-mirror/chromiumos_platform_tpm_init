@@ -496,7 +496,11 @@ bool Tpm::GetOwnerPassword(chromeos::Blob* owner_password) {
   return result;
 }
 
-bool Tpm::InitializeTpm() {
+bool Tpm::InitializeTpm(bool* OUT_took_ownership) {
+  if (OUT_took_ownership) {
+    *OUT_took_ownership = false;
+  }
+
   if (!IsConnected()) {
     Connect();
   }
@@ -543,6 +547,10 @@ bool Tpm::InitializeTpm() {
 
     is_owned_ = true;
     took_ownership = true;
+  }
+
+  if (OUT_took_ownership) {
+    *OUT_took_ownership = took_ownership;
   }
 
   // Ensure the SRK is available
@@ -592,7 +600,7 @@ bool Tpm::InitializeTpm() {
 
   is_being_owned_ = false;
 
-  return took_ownership;
+  return true;
 }
 
 bool Tpm::GetRandomData(size_t length, chromeos::Blob* data) {

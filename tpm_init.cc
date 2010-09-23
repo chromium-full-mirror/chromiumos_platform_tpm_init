@@ -20,7 +20,7 @@ class TpmInitTask : public PlatformThread::Delegate {
   TpmInitTask();
   virtual ~TpmInitTask();
 
-  void Init();
+  void Init(TpmInit::TpmInitCallback* notify_callback);
 
   virtual void ThreadMain();
 
@@ -35,25 +35,31 @@ class TpmInitTask : public PlatformThread::Delegate {
  private:
   scoped_ptr<tpm_init::Tpm> default_tpm_;
   tpm_init::Tpm* tpm_;
-  bool initialize_status_;
+  bool initialize_took_ownership_;
   bool task_done_;
   long initialization_time_;
+  TpmInit::TpmInitCallback* notify_callback_;
 };
 
 TpmInit::TpmInit()
-    : tpm_init_(new TpmInitTask()) {
+    : tpm_init_task_(new TpmInitTask()),
+      notify_callback_(NULL) {
 }
 
 TpmInit::~TpmInit() {
 }
 
+void TpmInit::Init(TpmInitCallback* notify_callback) {
+  notify_callback_ = notify_callback;
+}
+
 bool TpmInit::GetRandomData(int length, chromeos::Blob* data) {
-  return tpm_init_->GetRandomData(length, data);
+  return tpm_init_task_->GetRandomData(length, data);
 }
 
 bool TpmInit::StartInitializeTpm() {
-  tpm_init_->Init();
-  if (!PlatformThread::CreateNonJoinable(0, tpm_init_.get())) {
+  tpm_init_task_->Init(notify_callback_);
+  if (!PlatformThread::CreateNonJoinable(0, tpm_init_task_.get())) {
     LOG(ERROR) << "Unable to create TPM initialization background thread.";
     return false;
   }
@@ -61,53 +67,59 @@ bool TpmInit::StartInitializeTpm() {
 }
 
 bool TpmInit::IsTpmReady() {
-  return tpm_init_->IsTpmReady();
+  return tpm_init_task_->IsTpmReady();
 }
 
 bool TpmInit::IsTpmEnabled() {
-  return tpm_init_->IsTpmEnabled();
+  return tpm_init_task_->IsTpmEnabled();
 }
 
 bool TpmInit::IsTpmOwned() {
-  return tpm_init_->IsTpmOwned();
+  return tpm_init_task_->IsTpmOwned();
 }
 
 bool TpmInit::IsTpmBeingOwned() {
-  return tpm_init_->IsTpmBeingOwned();
+  return tpm_init_task_->IsTpmBeingOwned();
 }
 
 bool TpmInit::GetTpmPassword(chromeos::Blob* password) {
-  return tpm_init_->GetTpmPassword(password);
+  return tpm_init_task_->GetTpmPassword(password);
 }
 
 long TpmInit::GetInitializationMillis() {
-  return tpm_init_->GetInitializationMillis();
+  return tpm_init_task_->GetInitializationMillis();
 }
 
 TpmInitTask::TpmInitTask()
     : default_tpm_(new tpm_init::Tpm()),
       tpm_(default_tpm_.get()),
-      initialize_status_(false),
+      initialize_took_ownership_(false),
       task_done_(false),
-      initialization_time_(-1) {
+      initialization_time_(-1),
+      notify_callback_(NULL) {
 }
 
 TpmInitTask::~TpmInitTask() {
 }
 
-void TpmInitTask::Init() {
+void TpmInitTask::Init(TpmInit::TpmInitCallback* notify_callback) {
+  notify_callback_ = notify_callback;
   tpm_->Init();
 }
 
 void TpmInitTask::ThreadMain() {
   base::TimeTicks start = base::TimeTicks::Now();
-  initialize_status_ = tpm_->InitializeTpm();
+  bool initialize_result = tpm_->InitializeTpm(&initialize_took_ownership_);
   base::TimeDelta delta = (base::TimeTicks::Now() - start);
   initialization_time_ = delta.InMilliseconds();
-  if (initialize_status_) {
+  if (initialize_took_ownership_) {
     LOG(ERROR) << "TPM initialization took " << initialization_time_ << "ms";
   }
   task_done_ = true;
+  if (notify_callback_) {
+    notify_callback_->InitializeTpmComplete(initialize_result,
+                                            initialize_took_ownership_);
+  }
 }
 
 bool TpmInitTask::IsTpmReady() {
@@ -116,9 +128,9 @@ bool TpmInitTask::IsTpmReady() {
   if (!task_done_) {
     return false;
   }
-  // If initialize_status_ is true, then the TPM went through a full succesful
-  // ownership cycle in InitializeTpm()
-  if (initialize_status_) {
+  // If initialize_took_ownership_ is true, then the TPM went through a full
+  // succesful ownership cycle in InitializeTpm()
+  if (initialize_took_ownership_) {
     return true;
   }
   // If we get here, then the call to InitializeTpm() is complete and it

@@ -18,10 +18,17 @@ class TpmInitTask;
 class TpmInit {
  public:
 
+  class TpmInitCallback {
+   public:
+    virtual void InitializeTpmComplete(bool status, bool took_ownership) = 0;
+  };
+
   // Default constructor
   TpmInit();
 
   virtual ~TpmInit();
+
+  virtual void Init(TpmInitCallback* notify_callback);
 
   // Gets random data from the TPM
   //
@@ -57,7 +64,9 @@ class TpmInit {
  private:
   // The background task for initializing the TPM, implemented as a
   // PlatformThread::Delegate
-  scoped_ptr<TpmInitTask> tpm_init_;
+  scoped_ptr<TpmInitTask> tpm_init_task_;
+
+  TpmInitCallback* notify_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(TpmInit);
 };

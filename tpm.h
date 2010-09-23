@@ -69,7 +69,7 @@ class Tpm {
 
   // Runs the TPM initialization sequence.  This may take a long time due to the
   // call to Tspi_TPM_TakeOwnership.
-  bool InitializeTpm();
+  bool InitializeTpm(bool* OUT_took_ownership);
 
   // Gets random bytes from the TPM
   //
