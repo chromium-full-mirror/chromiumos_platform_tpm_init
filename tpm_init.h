@@ -4,8 +4,8 @@
 
 // TpmInit - public interface class for initializing the TPM
 
+#include <base/basictypes.h>
 #include <base/scoped_ptr.h>
-#include <base/platform_thread.h>
 #include <chromeos/utility.h>
 
 #ifndef TPM_INIT_TPM_INIT_H_
@@ -16,6 +16,10 @@ namespace tpm_init {
 class TpmInitTask;
 
 class TpmInit {
+  // Friend class TpmInitTask as it is a glue class to allow ThreadMain to be
+  // called on a separate thread without inheriting from
+  // PlatformThread::Delegate
+  friend class TpmInitTask;
  public:
 
   class TpmInitCallback {
@@ -52,21 +56,34 @@ class TpmInit {
   // Returns true if the TPM is being owned
   virtual bool IsTpmBeingOwned();
 
+  // Returns true if initialization has been called
+  virtual bool HasInitializeBeenCalled();
+
   // Gets the TPM password if the TPM initialization took ownership
   //
   // Parameters
   //   password (OUT) - The owner password used for the TPM
   virtual bool GetTpmPassword(chromeos::Blob* password);
 
+  // Clears the TPM password from memory and disk
+  virtual void ClearStoredTpmPassword();
+
   // Returns the number of milliseconds it took to initialize the TPM
   virtual long GetInitializationMillis();
 
  private:
+  virtual void ThreadMain();
+
   // The background task for initializing the TPM, implemented as a
   // PlatformThread::Delegate
   scoped_ptr<TpmInitTask> tpm_init_task_;
 
   TpmInitCallback* notify_callback_;
+
+  bool initialize_called_;
+  bool task_done_;
+  bool initialize_took_ownership_;
+  long initialization_time_;
 
   DISALLOW_COPY_AND_ASSIGN(TpmInit);
 };

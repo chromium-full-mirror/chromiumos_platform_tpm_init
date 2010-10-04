@@ -12,7 +12,9 @@
 #include <trousers/trousers.h>
 
 #include "crypto.h"
+#include "platform.h"
 #include "secure_blob.h"
+#include "tpm_status.pb.h"
 
 #ifndef TPM_INIT_TPM_H_
 #define TPM_INIT_TPM_H_
@@ -32,15 +34,6 @@ class Tpm {
   // Parameters
   virtual bool Init();
 
-  // Tries to connect to the TPM
-  virtual bool Connect();
-
-  // Returns true if this instance is connected to the TPM
-  virtual bool IsConnected();
-
-  // Disconnects from the TPM
-  virtual void Disconnect();
-
   // Returns the number of simultaneously-loaded RSA keys that this TPM supports
   int GetMaxRsaKeyCount();
 
@@ -50,6 +43,9 @@ class Tpm {
   // Parameters
   //   owner_password (OUT) - The random owner password used
   bool GetOwnerPassword(chromeos::Blob* owner_password);
+
+  // Clears the owner password from storage
+  void ClearStoredOwnerPassword();
 
   // Returns whether or not the TPM is enabled.  This method call returns a
   // cached result because querying the TPM directly will block if ownership is
@@ -79,6 +75,33 @@ class Tpm {
   bool GetRandomData(size_t length, chromeos::Blob* data);
 
  private:
+  // Tries to connect to the TPM
+  virtual TSS_HCONTEXT Connect();
+
+  // Disconnects from the TPM
+  virtual void Disconnect(TSS_HCONTEXT context_handle);
+
+  // Gets a handle to the SRK
+  bool LoadSrk(TSS_HCONTEXT context_handle, TSS_HKEY* srk_handle,
+               TSS_RESULT* result);
+
+  // Loads the contents of the file specified into a blob
+  bool LoadFileBytes(const FilePath& path, chromeos::Blob* blob);
+
+  // Stores the TPM owner password to the TpmStatus object
+  bool StoreOwnerPassword(const chromeos::Blob& owner_password,
+                          TpmStatus* tpm_status);
+
+  // Retrieves the TPM owner password
+  bool LoadOwnerPassword(const TpmStatus& tpm_status,
+                         chromeos::Blob* owner_password);
+
+  // Loads the TpmStatus object
+  bool LoadTpmStatus(TpmStatus* serialized);
+
+  // Saves the TpmStatus object
+  bool StoreTpmStatus(const TpmStatus& serialized);
+
   // Attempts to connect to tcsd
   //
   // Parameters
@@ -115,6 +138,13 @@ class Tpm {
   // Parameters
   //   context_handle - The context handle for the TPM session
   bool CreateEndorsementKey(TSS_HCONTEXT context_handle);
+
+  // Delegates ownership authority
+  //
+  // Parameters
+  //   context_handle - The context handle for the TPM session
+  bool DelegateTpmOwnership(TSS_HCONTEXT context_handle, TSS_HTPM tpm_handle,
+                            SecureBlob* delegation_blob);
 
   // Checks to see if the endorsement key is available by attempting to get its
   // public key
@@ -188,15 +218,18 @@ class Tpm {
   //   tpm_handle = The TPM handle
   bool TestTpmAuth(TSS_HTPM tpm_handle);
 
-  // The context handle for this TPM session
-  TSS_HCONTEXT context_handle_;
-
   // The default Crypto instance to use (for generating the random owner
   // password)
   scoped_ptr<Crypto> default_crypto_;
 
   // The actual Crypto instance to use
   Crypto* crypto_;
+
+  // The default Platform instance to use
+  scoped_ptr<Platform> default_platform_;
+
+  // The actual Platform instance to use
+  Platform* platform_;
 
   // If TPM ownership is taken, owner_password_ contains the password used
   SecureBlob owner_password_;
