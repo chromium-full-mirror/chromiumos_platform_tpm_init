@@ -83,22 +83,10 @@ bool TpmInit::StartInitializeTpm() {
 }
 
 bool TpmInit::IsTpmReady() {
-  // The TPM is not "ready" if the init call has not completed.  It may be in
-  // the middle of taking ownership.
-  if (!task_done_) {
-    return false;
-  }
-  // If initialize_took_ownership_ is true, then the TPM went through a full
-  // succesful ownership cycle in InitializeTpm()
-  if (initialize_took_ownership_) {
-    return true;
-  }
-  // If we get here, then the call to InitializeTpm() is complete and it
-  // returned false.  That merely means that it did not successfully take
-  // ownership, which is the common case after ownership is established on OOBE.
-  // In that case, the TPM is ready if it is enabled and owned.
+  // The TPM is "ready" if it is enabled, owned, and not being owned.
   return (tpm_init_task_->get_tpm()->IsEnabled() &&
-          tpm_init_task_->get_tpm()->IsOwned());
+          tpm_init_task_->get_tpm()->IsOwned() &&
+          !tpm_init_task_->get_tpm()->IsBeingOwned());
 }
 
 bool TpmInit::IsTpmEnabled() {
